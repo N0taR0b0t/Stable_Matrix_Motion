@@ -1,0 +1,124 @@
+#!/bin/bash
+
+LOG_FILE_PATH="/home/pi/GPT/Motion.log"
+PEOPLE_FILE_PATH="/home/pi/GPT/people.txt"
+
+# GPIO labels for understanding the direction of motion
+INSIDE_GPIO="14"
+OUTSIDE_GPIO="15"
+
+# Cooldown duration in nanoseconds (15 seconds)
+COOLDOWN_DURATION=15000000000
+
+door_status() {
+	for D in $(seq 1 6); do
+		last_door_change=$(($(date +%s)-$(stat -c %Y /home/pi/GPT/Door.log)))
+		fail_status=$(tail -n 1 /home/pi/GPT/Door.log | grep -ic "failure")
+		opened=$(tail -n 1 /home/pi/GPT/Door.log | grep -ic "open")
+		if [ "$fail_status" -eq "1" ] || [ "$last_door_change" -le "6" ] || [ "$opened" != "0" ]; then
+			echo "1" #OPENED
+			break
+		elif [ "$D" -eq "6" ]; then
+			echo "0" #CLOSED
+		fi
+		sleep 1
+	done
+}
+
+get_person_count() {
+    if [[ -f "$PEOPLE_FILE_PATH" ]]; then
+        cat "$PEOPLE_FILE_PATH"
+    else
+        echo 0
+    fi
+}
+
+update_person_count() {
+    local count=$1
+    echo "$count" > "$PEOPLE_FILE_PATH"
+}
+
+# Initial person count and cooldown time
+person_count=$(get_person_count)
+cooldown_time=0
+last_inside_time=0
+last_outside_time=0
+last_sensor_triggered=""
+
+tail -fn0 "$LOG_FILE_PATH" | while read -r line; do
+
+    # Extract the timestamp from the log line
+    timestamp=$(echo "$line" | awk '{print $1 " " $2}')
+
+    # Convert the timestamp to nanoseconds
+    current_time=$(date -d "$timestamp" +%s%N)
+
+    # Check if we're within the cooldown period
+    if [[ $current_time -lt $cooldown_time ]]; then
+        continue # Skip processing while in cooldown
+    fi
+
+    # Check if the line contains "GPIO 14"
+    inside_check=$(echo "$line" | grep -ic "GPIO $INSIDE_GPIO")
+    # Check if the line contains "GPIO 15"
+    outside_check=$(echo "$line" | grep -ic "GPIO $OUTSIDE_GPIO")
+
+    if [[ $inside_check -eq 1 ]]; then
+        sensor="INSIDE"
+        last_inside_time=$current_time
+    elif [[ $outside_check -eq 1 ]]; then
+        sensor="OUTSIDE"
+        last_outside_time=$current_time
+    else
+        continue
+    fi
+
+    # If the same sensor is triggered consecutively, skip the logic
+    if [[ $sensor == "$last_sensor_triggered" ]]; then
+        continue
+    fi
+
+    last_sensor_triggered=$sensor
+
+    # Evaluate the direction of motion
+    if [[ $last_inside_time -gt 0 && $last_outside_time -gt 0 ]]; then
+        time_diff=$(( (last_inside_time > last_outside_time ? last_inside_time - last_outside_time : last_outside_time - last_inside_time) ))
+
+        if [[ $time_diff -le 8000000000 ]]; then
+            # Set the cooldown expiration time
+            cooldown_time=$(($current_time + $COOLDOWN_DURATION))
+            if [[ $(($current_time - last_count_change_time)) -ge 15000000000 ]]; then
+                if [[ $last_outside_time -lt $last_inside_time ]] || { [[ $time_diff -lt 1000000000 ]] && [[ $last_outside_time -gt $last_inside_time ]]; }; then
+		    isZero=$person_count
+                    if [ "$(door_status)" -eq "1" ]; then
+                        ((person_count++))
+			if [ "$isZero" -eq "0" ] && [ "$person_count" -eq "1" ]; then
+				light_status=$(grep -ai "light" /home/pi/nodejs/log.log | tail -n 1 | grep -ic "lightson")
+				if [ "$light_status" -eq "0" ]; then
+					curl "https://maker.ifttt.com/trigger/ceiling/with/key/d34XWntYnK87SEXnvBdE_i"
+				fi
+			fi
+                        python3 /home/pi/LEDs/plus1.py &
+                        last_count_change_time=$current_time  # Update the time of the count change
+                    fi
+                elif [[ $last_inside_time -lt $last_outside_time ]]; then
+                    if [ "$(door_status)" -eq "1" ]; then
+                        ((person_count--))
+                        python3 /home/pi/LEDs/minus1.py &
+                        last_count_change_time=$current_time  # Update the time of the count change
+                    fi
+                fi
+
+                person_count=$(($person_count < 0 ? 0 : $person_count))
+                update_person_count "$person_count"
+
+                # Reset the time for the sensor that was not just triggered
+                if [[ $sensor == "INSIDE" ]]; then
+                    last_outside_time=0
+                else
+                    last_inside_time=0
+                fi
+            fi
+        fi
+    fi
+done
