@@ -2,6 +2,7 @@
 
 LOG_FILE_PATH="/home/pi/GPT/Motion.log"
 PEOPLE_FILE_PATH="/home/pi/GPT/people.txt"
+secret="$(cat /home/pi/GPT/secret)"
 
 # GPIO labels for understanding the direction of motion
 INSIDE_GPIO="14"
@@ -97,7 +98,7 @@ tail -fn0 "$LOG_FILE_PATH" | while read -r line; do
 			if [ "$isZero" -eq "0" ] && [ "$person_count" -eq "1" ]; then
 				light_status=$(grep -ai "light" /home/pi/nodejs/log.log | tail -n 1 | grep -ic "lightson")
 				if [ "$light_status" -eq "0" ]; then
-					curl "https://maker.ifttt.com/trigger/ceiling/with/key/d34XWntYnK87SEXnvBdE_i"
+					curl "https://maker.ifttt.com/trigger/ceiling/with/key/$secret"
 				fi
 			fi
                         python3 /home/pi/LEDs/plus1.py &
