@@ -9,12 +9,13 @@ OUTSIDE_GPIO="15"
 
 # Cooldown duration in nanoseconds (15 seconds)
 COOLDOWN_DURATION=10000000000
+door_log="/home/pi/GPT/Door.log"
 
 door_status() {
 	for D in $(seq 1 6); do
-		last_door_change=$(($(date +%s)-$(stat -c %Y /home/pi/GPT/Door.log)))
-		fail_status=$(tail -n 1 /home/pi/GPT/Door.log | grep -ic "failure")
-		not_opened=$(tail -n 1 /home/pi/GPT/Door.log | grep -ic "closed")
+		last_door_change=$(($(date +%s)-$(stat -c %Y $door_log)))
+		fail_status=$(tail -n 1 $door_log | grep -ic "failure")
+		not_opened=$(tail -n 1 $door_log | grep -ic "closed")
 		if [ "$last_door_change" -le "6" ] && [ "$not_opened" != "1" ]; then #Stupid, but lets see if it works
 			echo "1" #OPENED
 			break
@@ -36,6 +37,7 @@ get_person_count() {
 update_person_count() {
     local count=$1
     echo "$count" > "$PEOPLE_FILE_PATH"
+    echo "$count" >> "$LOG_FILE_PATH"
 }
 
 # Initial person count and cooldown time
@@ -88,7 +90,7 @@ tail -fn0 "$LOG_FILE_PATH" | while read -r line; do
             # Set the cooldown expiration time
             cooldown_time=$(($current_time + $COOLDOWN_DURATION))
             if [[ $(($current_time - last_count_change_time)) -ge $COOLDOWN_DURATION ]]; then
-                if [[ $last_outside_time -lt $last_inside_time ]] || { [[ $time_diff -lt 500000000 ]] && [[ $last_outside_time -ge $last_inside_time ]]; }; then
+                if [[ $last_outside_time -lt $last_inside_time ]] || { [[ $time_diff -lt 1000000000 ]] && [[ $last_outside_time -ge $last_inside_time ]]; }; then
 		    isZero=$person_count
                     if [ "$(door_status)" -eq "1" ] && [ "$person_count" -lt "5" ]; then
                         ((person_count++))
@@ -119,15 +121,6 @@ tail -fn0 "$LOG_FILE_PATH" | while read -r line; do
                     last_inside_time=0
                 fi
             fi
-        fi
-    fi
-    if [ "$(($(date +%M)%12))" -eq "0" ]; then
-    	if [ "$(tail -n 1 /home/pi/GPT/Door.log | grep -ic closed)" -eq "1" ]; then
-	  	ssh pi@sensor-pi.local "echo closed > /home/pi/GPT/Door.txt"
-  	elif [ "$(tail -n 1 /home/pi/GPT/Door.log | grep -ic open)" -eq "1" ]; then
-	  	ssh pi@sensor-pi.local "echo open > /home/pi/GPT/Door.txt"
-    	elif [ "$(tail -n 1 /home/pi/GPT/Door.log | grep -ic fail)" -eq "1" ]; then
-                ssh pi@sensor-pi.local "echo fail > /home/pi/GPT/Door.txt"
         fi
     fi
 done
